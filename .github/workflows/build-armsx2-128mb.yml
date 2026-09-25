@@ -35,7 +35,7 @@ jobs:
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-37" "build-tools;37.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
 
       - name: Patch ARM64 EE recompiler for 128MB
         shell: bash
@@ -131,6 +131,8 @@ jobs:
           p.write_text(s.replace("\tExtraMemory = false;", "\tExtraMemory = true;", 1))
           PY
           python3 /tmp/patch_128mb.py
+          sed -i 's/compileSdk = 37/compileSdk = 36/' armsx2/platforms/android/app/build.gradle.kts
+          sed -i 's/targetSdk = 37/targetSdk = 36/' armsx2/platforms/android/app/build.gradle.kts
           if grep -n 'Ps2MemSize::MainRam' armsx2/pcsx2/arm64/iR5900-arm64.cpp; then exit 1; fi
           if grep -n 'Extended RAM (128MB) is not supported' armsx2/pcsx2/Memory.cpp; then exit 1; fi
 
