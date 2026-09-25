@@ -1,0 +1,56 @@
+name: Temporary NetherSX2 build probe
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build zip unzip openjdk-17-jdk
+
+      - name: Install Android SDK/NDK
+        run: |
+          yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
+          ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platforms;android-31" "build-tools;31.0.0" "ndk;23.1.7779620"
+          echo "NDK_HOME=${ANDROID_HOME}/ndk/23.1.7779620" >> "$GITHUB_ENV"
+
+      - name: Clone sources
+        run: |
+          git clone --depth=1 https://github.com/Trixarian/AetherSX2.git aether
+          git clone --depth=1 https://github.com/JDHalfrack/pcsx2.git jd
+          file aether/aethersx2/pcsx2/libAetherSX2.a
+          grep -n -E "MainRam|ExtraRam|TotalRam|ExposedRam" jd/pcsx2/MemoryTypes.h | head -20
+
+      - name: Build stock Aether Android core
+        run: |
+          cmake -S aether/aethersx2 -B build-aether \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_HOME}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_ABI=arm64-v8a
+          cmake --build build-aether -j2
+
+      - name: Inspect baseline
+        run: |
+          LIB=$(find build-aether -name libemucore.so -print -quit)
+          test -n "$LIB"
+          file "$LIB"
+          "${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D --defined-only "$LIB" | grep 'Java_xyz_aethersx2_android_NativeLibrary_' | sort > baseline-jni.txt
+          wc -l baseline-jni.txt
+          cp "$LIB" libemucore-baseline.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nethersx2-probe
+          path: |
+            libemucore-baseline.so
+            baseline-jni.txt
