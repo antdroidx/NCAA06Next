@@ -26,6 +26,9 @@ jobs:
       - name: Clone sources
         run: |
           git clone --recurse-submodules --shallow-submodules --depth=1 https://github.com/Trixarian/AetherSX2.git aether
+          git clone --depth=1 https://github.com/pytorch/cpuinfo.git /tmp/cpuinfo
+          rm -rf aether/aethersx2/3rdparty/cpuinfo/deps/clog
+          cp -a /tmp/cpuinfo/deps/clog aether/aethersx2/3rdparty/cpuinfo/deps/clog
           git clone --depth=1 https://github.com/JDHalfrack/pcsx2.git jd
           file aether/aethersx2/pcsx2/libAetherSX2.a
           grep -n -E "MainRam|ExtraRam|TotalRam|ExposedRam" jd/pcsx2/MemoryTypes.h | head -20
