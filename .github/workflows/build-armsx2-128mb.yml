@@ -1,0 +1,164 @@
+name: Build ARMSX2 128MB ARM64 test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - build/armsx2-128mb-arm64
+    paths:
+      - .github/workflows/build-armsx2-128mb.yml
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout ARMSX2 source
+        uses: actions/checkout@v4
+        with:
+          repository: SgtBilko76/ARMSX2-3D
+          ref: quest-vr-stereo
+          submodules: recursive
+          path: armsx2
+
+      - name: Apply 128MB ARM64 EE recompiler patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path("armsx2")
+
+          p = root / "pcsx2/arm64/iR5900-arm64.cpp"
+          s = p.read_text()
+
+          replacements = {
+              "static u16 manual_page[Ps2MemSize::MainRam / 4096] = {};":
+                  "static u16 manual_page[Ps2MemSize::TotalRam / 4096] = {};",
+              "static u8 manual_counter[Ps2MemSize::MainRam / 4096] = {};":
+                  "static u8 manual_counter[Ps2MemSize::TotalRam / 4096] = {};",
+              "recLutEntries = (Ps2MemSize::MainRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2) / 4;":
+                  "recLutEntries = (Ps2MemSize::ExposedRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2) / 4;",
+              "curpos += (Ps2MemSize::MainRam / 4);":
+                  "curpos += (Ps2MemSize::ExposedRam / 4);",
+              "if (recRAMCopy.size() != Ps2MemSize::MainRam)\n\t\trecRAMCopy.resize(Ps2MemSize::MainRam);":
+                  "if (recRAMCopy.size() != Ps2MemSize::ExposedRam)\n\t\trecRAMCopy.resize(Ps2MemSize::ExposedRam);",
+              "\t\tPs2MemSize::MainRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2);":
+                  "\t\tPs2MemSize::ExposedRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2);",
+              "if (HWADDR(pc) <= Ps2MemSize::MainRam)":
+                  "if (HWADDR(pc) <= Ps2MemSize::ExposedRam)",
+              "Ps2MemSize::MainRam - oldBlock->startpc":
+                  "Ps2MemSize::ExposedRam - oldBlock->startpc",
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f"Expected source pattern missing: {old[:100]!r}")
+              s = s.replace(old, new)
+
+          old_map = """\t// Map EE RAM (32MB, mirrored)
+\tfor (int i = 0; i < 0x200; i++)
+\t{
+\t\tu32 mask = (Ps2MemSize::MainRam / _64kb) - 1;
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x0000, i, i & mask);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x2000, i, i & mask);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x3000, i, i & mask);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x8000, i, i & mask);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xa000, i, i & mask);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xb000, i, i & mask);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xc000, i, i & mask);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xd000, i, i & mask);
+\t}"""
+          new_map = """\t// Map all exposed EE RAM (32MB retail or 128MB devkit), mirrored.
+\tfor (int i = 0; i < static_cast<int>(Ps2MemSize::ExposedRam / _64kb); i++)
+\t{
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x0000, i, i);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x2000, i, i);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x3000, i, i);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x8000, i, i);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xa000, i, i);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xb000, i, i);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xc000, i, i);
+\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xd000, i, i);
+\t}"""
+          if old_map not in s:
+              raise SystemExit("Expected ARM64 RAM map block missing")
+          s = s.replace(old_map, new_map)
+
+          old_comment = """\t// MainRam, deliberately — this whole rec is MainRam-only: recLutEntries and
+\t// the recRAM advance above, the (MainRam / _64kb) alias mask in recResetRaw,
+\t// and manual_page / manual_counter. Upstream x86 uses ExposedRam throughout
+\t// instead (iR5900.cpp:564-577). Widening this buffer alone would desync the
+\t// snapshots from a LUT that aliases high RAM back into the low 32 MB.
+"""
+          new_comment = """\t// Keep the ARM64 snapshot/LUT span synchronized with the amount of EE RAM
+\t// exposed to the guest. This mirrors the x86 recompiler and is required for
+\t// executing blocks from the 32-128MB devkit region.
+"""
+          if old_comment in s:
+              s = s.replace(old_comment, new_comment)
+          p.write_text(s)
+
+          p = root / "pcsx2/Memory.cpp"
+          s = p.read_text()
+          start = s.index("void memSetExtraMemMode(bool mode)")
+          sub = s[start:]
+          if "#ifdef ARCH_ARM64" in sub:
+              a = sub.index("#ifdef ARCH_ARM64")
+              b = sub.index("#endif", a) + len("#endif")
+              sub = sub[:a] + sub[b:]
+              s = s[:start] + sub
+          s = s.replace("u32 ExposedRam = MainRam;", "u32 ExposedRam = TotalRam;", 1)
+          s = s.replace("u32 ExposedIopRam = IopRam;", "u32 ExposedIopRam = TotalIopRam;", 1)
+          s = s.replace("static bool s_extra_memory = false;", "static bool s_extra_memory = true;", 1)
+          marker = "void memSetExtraMemMode(bool mode)\n{"
+          if marker not in s:
+              raise SystemExit("memSetExtraMemMode marker missing")
+          s = s.replace(marker, marker + "\n\t// NCAA NEXT build: always expose devkit memory.\n\tmode = true;", 1)
+          p.write_text(s)
+
+          p = root / "pcsx2/Pcsx2Config.cpp"
+          s = p.read_text()
+          if "ExtraMemory = false;" not in s:
+              raise SystemExit("ExtraMemory default marker missing")
+          s = s.replace("ExtraMemory = false;", "ExtraMemory = true;", 1)
+          p.write_text(s)
+
+          print("128MB ARM64 patch applied")
+          PY
+
+      - name: Verify patch
+        run: |
+          ! grep -n "MainRam-only" armsx2/pcsx2/arm64/iR5900-arm64.cpp
+          grep -n "TotalRam / 4096" armsx2/pcsx2/arm64/iR5900-arm64.cpp
+          grep -n "ExposedRam / _64kb" armsx2/pcsx2/arm64/iR5900-arm64.cpp
+          grep -n "mode = true" armsx2/pcsx2/Memory.cpp
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install NDK and CMake
+        run: yes | sdkmanager "ndk;28.2.13676358" "cmake;3.31.6" >/dev/null || true
+
+      - name: Fetch shaderc third-party deps
+        working-directory: armsx2/platforms/android
+        run: python3 app/src/main/cpp/3rdparty/shaderc/utils/git-sync-deps
+
+      - name: Install Rust Android target
+        run: rustup target add aarch64-linux-android
+
+      - name: Build release APK
+        working-directory: armsx2/platforms/android
+        run: ./gradlew :app:assembleRelease --stacktrace -Parmsx2.versionName=NEXT27-128MB -Parmsx2.versionCode=128027
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARMSX2-NEXT27-128MB-ARM64
+          path: armsx2/platforms/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
