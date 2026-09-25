@@ -26,16 +26,19 @@ jobs:
       - name: Clone sources
         run: |
           git clone --recurse-submodules --shallow-submodules --depth=1 https://github.com/Trixarian/AetherSX2.git aether
+          if [ -f aether/aethersx2/CMakeLists.txt ]; then AETHER_ROOT=aether/aethersx2; else AETHER_ROOT=aether; fi
+          echo "AETHER_ROOT=$AETHER_ROOT" >> "$GITHUB_ENV"
           git clone --depth=1 https://github.com/pytorch/cpuinfo.git /tmp/cpuinfo
-          rm -rf aether/aethersx2/3rdparty/cpuinfo/deps/clog
-          cp -a /tmp/cpuinfo/deps/clog aether/aethersx2/3rdparty/cpuinfo/deps/clog
+          mkdir -p "$AETHER_ROOT/3rdparty/cpuinfo/deps"
+          rm -rf "$AETHER_ROOT/3rdparty/cpuinfo/deps/clog"
+          cp -a /tmp/cpuinfo/deps/clog "$AETHER_ROOT/3rdparty/cpuinfo/deps/clog"
           git clone --depth=1 https://github.com/JDHalfrack/pcsx2.git jd
-          file aether/aethersx2/pcsx2/libAetherSX2.a
+          file "$AETHER_ROOT/pcsx2/libAetherSX2.a"
           grep -n -E "MainRam|ExtraRam|TotalRam|ExposedRam" jd/pcsx2/MemoryTypes.h | head -20
 
       - name: Build stock Aether Android core
         run: |
-          cmake -S aether/aethersx2 -B build-aether \
+          cmake -S "$AETHER_ROOT" -B build-aether \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="${NDK_HOME}/build/cmake/android.toolchain.cmake" \
             -DANDROID_PLATFORM=android-26 \
