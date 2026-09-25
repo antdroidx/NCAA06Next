@@ -1,4 +1,4 @@
-name: Temporary NetherSX2 build probe
+name: Temporary NEXT27 ARMSX2 128MB build
 
 on:
   pull_request:
@@ -6,57 +6,125 @@ on:
       - main
 
 jobs:
-  probe:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build packages
+      - name: Checkout ARMSX2
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build zip unzip openjdk-17-jdk
+          git clone --recurse-submodules https://github.com/ARMSX2/ARMSX2.git armsx2
+          cd armsx2
+          git rev-parse HEAD
 
-      - name: Install Android SDK/NDK
+      - name: Patch hard-enabled 128MB EE RAM for ARM64
         run: |
-          yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
-          ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platforms;android-31" "build-tools;31.0.0" "ndk;23.1.7779620"
-          echo "NDK_HOME=${ANDROID_HOME}/ndk/23.1.7779620" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Clone sources
-        run: |
-          git clone --recurse-submodules --shallow-submodules --depth=1 https://github.com/Trixarian/AetherSX2.git aether
-          if [ -f aether/aethersx2/CMakeLists.txt ]; then AETHER_ROOT=aether/aethersx2; else AETHER_ROOT=aether; fi
-          echo "AETHER_ROOT=$AETHER_ROOT" >> "$GITHUB_ENV"
-          git clone --depth=1 https://github.com/pytorch/cpuinfo.git /tmp/cpuinfo
-          mkdir -p "$AETHER_ROOT/3rdparty/cpuinfo/deps"
-          rm -rf "$AETHER_ROOT/3rdparty/cpuinfo/deps/clog"
-          cp -a /tmp/cpuinfo/deps/clog "$AETHER_ROOT/3rdparty/cpuinfo/deps/clog"
-          git clone --depth=1 https://github.com/JDHalfrack/pcsx2.git jd
-          file "$AETHER_ROOT/pcsx2/libAetherSX2.a"
-          grep -n -E "MainRam|ExtraRam|TotalRam|ExposedRam" jd/pcsx2/MemoryTypes.h | head -20
+          root = Path("armsx2")
+          p = root / "pcsx2/arm64/iR5900-arm64.cpp"
+          s = p.read_text()
 
-      - name: Build stock Aether Android core
-        run: |
-          cmake -S "$AETHER_ROOT" -B build-aether \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="${NDK_HOME}/build/cmake/android.toolchain.cmake" \
-            -DANDROID_PLATFORM=android-26 \
-            -DANDROID_ABI=arm64-v8a
-          cmake --build build-aether -j2
+          # Static tracking arrays must cover the maximum possible EE RAM.
+          s = s.replace(
+              "static u16 manual_page[Ps2MemSize::MainRam / 4096] = {};",
+              "static u16 manual_page[Ps2MemSize::TotalRam / 4096] = {};")
+          s = s.replace(
+              "static u8 manual_counter[Ps2MemSize::MainRam / 4096] = {};",
+              "static u8 manual_counter[Ps2MemSize::TotalRam / 4096] = {};")
 
-      - name: Inspect baseline
+          # The remaining MainRam references in the ARM64 EE recompiler are
+          # runtime LUT/copy/page bounds. Match JDHalfrack x86 behavior.
+          s = s.replace("Ps2MemSize::MainRam", "Ps2MemSize::ExposedRam")
+
+          # Keep static arrays compile-time sized after the global substitution.
+          s = s.replace(
+              "static u16 manual_page[Ps2MemSize::ExposedRam / 4096] = {};",
+              "static u16 manual_page[Ps2MemSize::TotalRam / 4096] = {};")
+          s = s.replace(
+              "static u8 manual_counter[Ps2MemSize::ExposedRam / 4096] = {};",
+              "static u8 manual_counter[Ps2MemSize::TotalRam / 4096] = {};")
+
+          p.write_text(s)
+
+          # Hard-enable extended memory regardless of saved Android settings.
+          p = root / "pcsx2/VMManager.cpp"
+          s = p.read_text()
+          n = s.count("memSetExtraMemMode(EmuConfig.Cpu.ExtraMemory);")
+          if n != 2:
+              raise SystemExit(f"Expected 2 VM memory-mode callsites, found {n}")
+          s = s.replace(
+              "memSetExtraMemMode(EmuConfig.Cpu.ExtraMemory);",
+              "EmuConfig.Cpu.ExtraMemory = true;\n\tmemSetExtraMemMode(true);")
+          p.write_text(s)
+
+          # Default true as well, so UI/config state agrees with the forced core.
+          p = root / "pcsx2/Pcsx2Config.cpp"
+          s = p.read_text()
+          if "ExtraMemory = false;" not in s:
+              raise SystemExit("ExtraMemory default not found")
+          s = s.replace("ExtraMemory = false;", "ExtraMemory = true;", 1)
+          p.write_text(s)
+
+          # Sanity checks: ARM64 rec should have no runtime MainRam bounds left.
+          arm = (root / "pcsx2/arm64/iR5900-arm64.cpp").read_text()
+          leftovers = [ln for ln in arm.splitlines() if "Ps2MemSize::MainRam" in ln]
+          if leftovers:
+              raise SystemExit("Unexpected MainRam refs in ARM64 rec:\n" + "\n".join(leftovers))
+
+          print("128MB ARM64 patch applied.")
+          for key in ("manual_page", "recLutEntries", "recRAMCopy.size()", "HWADDR(pc)"):
+              print("\n--", key)
+              for i, line in enumerate(arm.splitlines(), 1):
+                  if key in line:
+                      print(i, line)
+          PY
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install NDK and CMake
         run: |
-          LIB=$(find build-aether -name libemucore.so -print -quit)
-          test -n "$LIB"
-          file "$LIB"
-          "${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D --defined-only "$LIB" | grep 'Java_xyz_aethersx2_android_NativeLibrary_' | sort > baseline-jni.txt
-          wc -l baseline-jni.txt
-          cp "$LIB" libemucore-baseline.so
+          yes | sdkmanager "ndk;28.2.13676358" "cmake;3.31.6" >/dev/null || true
+
+      - name: Fetch shaderc dependencies
+        working-directory: armsx2/platforms/android
+        run: python3 app/src/main/cpp/3rdparty/shaderc/utils/git-sync-deps
+
+      - name: Install Rust Android target
+        run: rustup target add aarch64-linux-android
+
+      - name: Build debug APK
+        working-directory: armsx2/platforms/android
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Collect APK and patch manifest
+        run: |
+          mkdir -p out
+          find armsx2/platforms/android/app/build/outputs/apk -type f -name '*.apk' -print -exec cp {} out/ \;
+          {
+            echo "ARMSX2 source:"
+            cd armsx2 && git rev-parse HEAD
+            echo
+            echo "Remaining MainRam refs in ARM64 recompiler:"
+            grep -n 'Ps2MemSize::MainRam' pcsx2/arm64/iR5900-arm64.cpp || true
+            echo
+            echo "Extended memory VM callsites:"
+            grep -n -A2 -B2 'memSetExtraMemMode' pcsx2/VMManager.cpp
+          } > out/build-info.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nethersx2-probe
-          path: |
-            libemucore-baseline.so
-            baseline-jni.txt
+          name: NEXT27-ARMSX2-128MB-test
+          path: out/
+          if-no-files-found: error
