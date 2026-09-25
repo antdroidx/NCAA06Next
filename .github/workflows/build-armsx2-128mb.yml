@@ -13,9 +13,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - name: Checkout holder repo
-        uses: actions/checkout@v4
-
       - name: Checkout ARMSX2 source
         uses: actions/checkout@v4
         with:
