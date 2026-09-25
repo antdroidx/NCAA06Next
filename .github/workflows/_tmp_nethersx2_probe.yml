@@ -1,7 +1,7 @@
 name: Temporary NetherSX2 build probe
 
 on:
-  push:
+  pull_request:
     branches:
       - main
 
