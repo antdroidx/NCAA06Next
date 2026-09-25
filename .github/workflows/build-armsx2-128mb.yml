@@ -40,102 +40,99 @@ jobs:
       - name: Patch ARM64 EE recompiler for 128MB
         shell: bash
         run: |
-          python3 - <<'PY'
+          cat > /tmp/patch_128mb.py <<'PY'
           from pathlib import Path
 
           root = Path("armsx2")
           p = root / "pcsx2/arm64/iR5900-arm64.cpp"
           s = p.read_text()
 
-          pairs = [
-              ("static u16 manual_page[Ps2MemSize::MainRam / 4096] = {};",
-               "static u16 manual_page[Ps2MemSize::TotalRam / 4096] = {};"),
-              ("static u8 manual_counter[Ps2MemSize::MainRam / 4096] = {};",
-               "static u8 manual_counter[Ps2MemSize::TotalRam / 4096] = {};"),
-              ("recLutEntries = (Ps2MemSize::MainRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2) / 4;",
-               "recLutEntries = (Ps2MemSize::ExposedRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2) / 4;"),
-              ("curpos += (Ps2MemSize::MainRam / 4);",
-               "curpos += (Ps2MemSize::ExposedRam / 4);"),
-              ("if (recRAMCopy.size() != Ps2MemSize::MainRam)\n\t\trecRAMCopy.resize(Ps2MemSize::MainRam);",
-               "if (recRAMCopy.size() != Ps2MemSize::ExposedRam)\n\t\trecRAMCopy.resize(Ps2MemSize::ExposedRam);"),
-              ("Ps2MemSize::MainRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2);",
-               "Ps2MemSize::ExposedRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2);"),
-              ("if (HWADDR(pc) <= Ps2MemSize::MainRam)",
-               "if (HWADDR(pc) <= Ps2MemSize::ExposedRam)"),
-              ("Ps2MemSize::MainRam - oldBlock->startpc);",
-               "Ps2MemSize::ExposedRam - oldBlock->startpc);"),
+          replacements = [
+              ("static u16 manual_page[Ps2MemSize::MainRam / 4096] = {};", "static u16 manual_page[Ps2MemSize::TotalRam / 4096] = {};"),
+              ("static u8 manual_counter[Ps2MemSize::MainRam / 4096] = {};", "static u8 manual_counter[Ps2MemSize::TotalRam / 4096] = {};"),
+              ("recLutEntries = (Ps2MemSize::MainRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2) / 4;", "recLutEntries = (Ps2MemSize::ExposedRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2) / 4;"),
+              ("curpos += (Ps2MemSize::MainRam / 4);", "curpos += (Ps2MemSize::ExposedRam / 4);"),
+              ("if (recRAMCopy.size() != Ps2MemSize::MainRam)", "if (recRAMCopy.size() != Ps2MemSize::ExposedRam)"),
+              ("recRAMCopy.resize(Ps2MemSize::MainRam);", "recRAMCopy.resize(Ps2MemSize::ExposedRam);"),
+              ("Ps2MemSize::MainRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2);", "Ps2MemSize::ExposedRam + Ps2MemSize::Rom + Ps2MemSize::Rom1 + Ps2MemSize::Rom2);"),
+              ("if (HWADDR(pc) <= Ps2MemSize::MainRam)", "if (HWADDR(pc) <= Ps2MemSize::ExposedRam)"),
+              ("Ps2MemSize::MainRam - oldBlock->startpc);", "Ps2MemSize::ExposedRam - oldBlock->startpc);"),
           ]
-          for old, new in pairs:
+
+          for old, new in replacements:
               if old not in s:
-                  raise SystemExit(f"missing expected source: {old[:100]}")
+                  raise SystemExit("missing expected source: " + old)
               s = s.replace(old, new)
 
-          old_map = """\t// Map EE RAM (32MB, mirrored)
-\tfor (int i = 0; i < 0x200; i++)
-\t{
-\t\tu32 mask = (Ps2MemSize::MainRam / _64kb) - 1;
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x0000, i, i & mask);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x2000, i, i & mask);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x3000, i, i & mask);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x8000, i, i & mask);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xa000, i, i & mask);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xb000, i, i & mask);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xc000, i, i & mask);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xd000, i, i & mask);
-\t}
-"""
-          new_map = """\t// Map all exposed EE RAM, including the 96 MB devkit extension.
-\tfor (int i = 0; i < static_cast<int>(Ps2MemSize::ExposedRam / _64kb); i++)
-\t{
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x0000, i, i);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x2000, i, i);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x3000, i, i);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x8000, i, i);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xa000, i, i);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xb000, i, i);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xc000, i, i);
-\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xd000, i, i);
-\t}
-"""
-          if old_map not in s:
-              raise SystemExit("missing 32MB recLUT map block")
-          s = s.replace(old_map, new_map)
+          lines = s.splitlines()
+          out = []
+          i = 0
+          replaced_map = False
+          while i < len(lines):
+              if lines[i].strip() == "// Map EE RAM (32MB, mirrored)":
+                  replaced_map = True
+                  while i < len(lines) and lines[i].strip() != "}":
+                      i += 1
+                  if i >= len(lines):
+                      raise SystemExit("unterminated old RAM mapping block")
+                  i += 1
+                  out.extend([
+                      "\t// Map all exposed EE RAM, including the 96 MB devkit extension.",
+                      "\tfor (int i = 0; i < static_cast<int>(Ps2MemSize::ExposedRam / _64kb); i++)",
+                      "\t{",
+                      "\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x0000, i, i);",
+                      "\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x2000, i, i);",
+                      "\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x3000, i, i);",
+                      "\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0x8000, i, i);",
+                      "\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xa000, i, i);",
+                      "\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xb000, i, i);",
+                      "\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xc000, i, i);",
+                      "\t\trecLUT_SetPage(recLUT, hwLUT, recRAM, 0xd000, i, i);",
+                      "\t}",
+                  ])
+                  continue
+              if "MainRam, deliberately" in lines[i]:
+                  out.append("\t// Snapshot every byte of currently exposed EE RAM.")
+                  i += 5
+                  continue
+              out.append(lines[i])
+              i += 1
 
-          old_comment = """\t// MainRam, deliberately — this whole rec is MainRam-only: recLutEntries and
-\t// the recRAM advance above, the (MainRam / _64kb) alias mask in recResetRaw,
-\t// and manual_page / manual_counter. Upstream x86 uses ExposedRam throughout
-\t// instead (iR5900.cpp:564-577). Widening this buffer alone would desync the
-\t// snapshots from a LUT that aliases high RAM back into the low 32 MB.
-"""
-          s = s.replace(old_comment, "\t// Snapshot every byte of currently exposed EE RAM.\n")
-          p.write_text(s)
+          if not replaced_map:
+              raise SystemExit("old ARM64 recLUT mapping block not found")
+          p.write_text("\n".join(out) + "\n")
 
           p = root / "pcsx2/Memory.cpp"
-          s = p.read_text()
-          start = s.index("void memSetExtraMemMode(bool mode)\n{")
-          marker = "\n\t// update the amount of RAM exposed to the VM"
-          end = s.index(marker, start)
-          s = s[:start] + """void memSetExtraMemMode(bool mode)
-{
-\t// NEXT 27 test build: always expose the full devkit memory map.
-\tmode = true;
-""" + s[end:]
-          p.write_text(s)
+          lines = p.read_text().splitlines()
+          out = []
+          i = 0
+          changed = False
+          while i < len(lines):
+              if lines[i] == "void memSetExtraMemMode(bool mode)":
+                  changed = True
+                  out.append(lines[i])
+                  out.append("{")
+                  out.append("\t// NEXT 27 test build: always expose the full devkit memory map.")
+                  out.append("\tmode = true;")
+                  i += 2
+                  while i < len(lines) and "update the amount of RAM exposed to the VM" not in lines[i]:
+                      i += 1
+                  continue
+              out.append(lines[i])
+              i += 1
+          if not changed:
+              raise SystemExit("memSetExtraMemMode not found")
+          p.write_text("\n".join(out) + "\n")
 
           p = root / "pcsx2/Pcsx2Config.cpp"
           s = p.read_text()
           if "\tExtraMemory = false;" not in s:
-              raise SystemExit("missing ExtraMemory default")
+              raise SystemExit("ExtraMemory default not found")
           p.write_text(s.replace("\tExtraMemory = false;", "\tExtraMemory = true;", 1))
           PY
-
-          echo "Check for remaining 32 MB-only ARM64 assumptions:"
-          if grep -n 'Ps2MemSize::MainRam' armsx2/pcsx2/arm64/iR5900-arm64.cpp; then
-            exit 1
-          fi
-          if grep -n 'Extended RAM (128MB) is not supported' armsx2/pcsx2/Memory.cpp; then
-            exit 1
-          fi
+          python3 /tmp/patch_128mb.py
+          if grep -n 'Ps2MemSize::MainRam' armsx2/pcsx2/arm64/iR5900-arm64.cpp; then exit 1; fi
+          if grep -n 'Extended RAM (128MB) is not supported' armsx2/pcsx2/Memory.cpp; then exit 1; fi
 
       - name: Build universal 4K/16K Android APK
         shell: bash
