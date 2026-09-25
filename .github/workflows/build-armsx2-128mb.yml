@@ -136,6 +136,12 @@ jobs:
           if grep -n 'Ps2MemSize::MainRam' armsx2/pcsx2/arm64/iR5900-arm64.cpp; then exit 1; fi
           if grep -n 'Extended RAM (128MB) is not supported' armsx2/pcsx2/Memory.cpp; then exit 1; fi
 
+      - name: Create Android debug keystore
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000
+
       - name: Build universal 4K/16K Android APK
         shell: bash
         run: |
